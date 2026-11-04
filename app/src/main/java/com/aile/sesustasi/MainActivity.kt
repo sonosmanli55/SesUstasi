@@ -9,11 +9,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
-import android.graphics.Color
 import android.graphics.drawable.ClipDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -35,6 +35,9 @@ class MainActivity : Activity() {
         /** Çocuk modunda PIN/desenle kilit açıldı mı? Uygulama arka plana gidince sıfırlanır. */
         var unlocked = false
     }
+
+    /** Kaydırıcının ne yaptığı: sabit seviye (ebeveyn/çocuk) ya da serbest mod (kilitsiz, doğrudan ses). */
+    private enum class SliderKind { LOCK_PARENT, LOCK_CHILD, FREE }
 
     private lateinit var root: FrameLayout
     private lateinit var ui: Ui
@@ -93,6 +96,12 @@ class MainActivity : Activity() {
         root.removeAllViews()
         updateBox = null
         if (Store.childMode(this) && !unlocked) root.addView(lockView()) else root.addView(mainView())
+    }
+
+    /** Bölüm başlığı + "bu bölüm ne işe yarar" tek cümlesi. */
+    private fun LinearLayout.titled(title: String, purpose: String) {
+        addView(ui.heading(title), ui.lp(ui.wrap, ui.wrap, l = 4, t = 24))
+        addView(ui.small(purpose), ui.lp(ui.match, ui.wrap, l = 4, t = 2, b = 8))
     }
 
     // ---------- Kilit ekranı (çocuk modu) ----------
@@ -159,6 +168,7 @@ class MainActivity : Activity() {
         val child = Store.childMode(this)
         val special = Store.special(this)
         val master = Store.master(this)
+        val free = !child && Store.keyMode(this)
 
         val sv = ScrollView(this)
         sv.isVerticalScrollBarEnabled = false
@@ -166,149 +176,101 @@ class MainActivity : Activity() {
         col.setPadding(dp(16), dp(20), dp(16), dp(36))
         sv.addView(col)
 
-        // Başlık ve durum özeti
+        // Başlık + tek cümlelik durum
         col.addView(ui.title("Ses Ustası"), ui.lp(ui.wrap, ui.wrap, l = 4))
-        val status = when {
-            !master -> "Kapalı"
-            special -> "Özel ayar %${Store.activeLevel(this)} etkin"
-            else -> "Telefonun normal ayarı"
-        } + " · " + (if (child) "Çocuk modu" else "Ebeveyn modu")
-        col.addView(ui.small(status), ui.lp(ui.wrap, ui.wrap, l = 4, t = 2, b = 16))
+        val sentence = when {
+            !master -> "Kapalı: ses ayarlarına karışmıyor"
+            !special -> "Telefonun kendi ayarı kullanılıyor"
+            free -> {
+                val kb = Store.keyBoost(this)
+                if (kb > 100) "Tuşlarla serbest · yükseltme %$kb" else "Tuşlarla serbest · yükseltme yok"
+            }
+            else -> "Sabit seviye %${Store.activeLevel(this)}"
+        }
+        col.addView(
+            ui.small(sentence + " · " + (if (child) "Çocuk modu" else "Ebeveyn modu")),
+            ui.lp(ui.wrap, ui.wrap, l = 4, t = 2, b = 8)
+        )
 
-        // Ana anahtar
+        // 1) Ana şalter
+        col.titled("Uygulama", "Ana şalter. Kapalıyken uygulama sesinize hiç karışmaz.")
         val power = ui.section()
         ui.addRow(
             power,
-            ui.row("Uygulama aktif", "Arka planda sesi kilitler", trailing = styledSwitch(master) { on ->
-                Store.setMaster(this, on)
-                VolumeService.refresh(this)
-                render()
-            })
+            ui.row(
+                if (master) "Açık" else "Kapalı",
+                if (master) "Arka planda çalışıyor" else "Açmak için sağdaki anahtara dokunun",
+                trailing = styledSwitch(master) { on ->
+                    Store.setMaster(this, on)
+                    VolumeService.refresh(this)
+                    render()
+                }
+            )
         )
         col.addView(power)
 
-        // Ses seviyesi
-        col.addView(ui.heading("Ses seviyesi"), ui.lp(ui.wrap, ui.wrap, l = 4, t = 24, b = 8))
-        col.addView(levelCard(child, special))
+        // 2) Ses
+        col.titled(
+            "Ses",
+            if (child) "Sesi azaltabilir ya da en fazla telefonun kendi sınırına (%100) çıkarabilirsiniz."
+            else "Sesin nasıl yönetileceğini buradan seçin."
+        )
+        col.addView(levelCard(child, special, master, free))
 
+        // Serbest modda tuş hizmeti kurulumu ve kullanım
+        if (free) {
+            col.titled("Tuş hizmeti", "Ses tuşlarını dinleyen yardımcı. Çalışması için bir kez izin verilmesi gerekir.")
+            col.addView(keyServiceSection())
+        }
+
+        // 3) Çocuk modu
         if (!child) {
+            col.titled("Çocuk modu", "Çocuk için ses sınırı. Bu mod PIN ya da desenle kilitlenir, yükseltme yoktur.")
             val kid = ui.section()
             val kidInner = ui.vbox()
             kidInner.setPadding(dp(20), dp(16), dp(20), dp(8))
             val kidLabel = ui.body("")
             kidInner.addView(kidLabel)
             kidInner.addView(
-                ui.small("Çocuk modu en fazla %100 olabilir; yükseltme yoktur."),
+                ui.small("Çocuk modundayken ses bu seviyede kilitli kalır (en fazla %100)."),
                 ui.lp(ui.wrap, ui.wrap, t = 2)
             )
-            kidInner.addView(slider(true) { v -> kidLabel.text = "Çocuk modu: %$v" }, ui.lp(ui.match, ui.wrap, t = 4))
+            kidInner.addView(
+                slider(SliderKind.LOCK_CHILD) { v -> kidLabel.text = "Çocuk modu ses seviyesi: %$v" },
+                ui.lp(ui.match, ui.wrap, t = 4)
+            )
             kid.addView(kidInner)
-            col.addView(kid, ui.lp(ui.match, ui.wrap, t = 12))
-        }
-
-        if (!child) {
-            col.addView(ui.heading("Ses tuşlarıyla yükseltme"), ui.lp(ui.wrap, ui.wrap, l = 4, t = 24, b = 8))
-            val keys = ui.section()
-            val keyOn = Store.keyMode(this)
-            ui.addRow(
-                keys,
-                ui.row(
-                    "Tuşlarla yükselt",
-                    "Açıkken ses kilitlenmez. Telefon sesi en yüksekteyken ses artır tuşuna basmaya devam ettikçe ses yükselir.",
-                    trailing = styledSwitch(keyOn) { on ->
-                        Store.setKeyMode(this, on)
-                        Store.setKeyBoost(this, 100)
-                        VolumeService.refresh(this)
-                        render()
-                    }
-                )
-            )
-            if (keyOn) {
-                val granted = keyServiceEnabled()
-                if (!granted) {
-                    ui.addRow(
-                        keys,
-                        ui.row(
-                            "1. Kısıtlamayı kaldır",
-                            "Android, dışarıdan kurulan uygulamalarda erişilebilirliği engeller. Açılan sayfada sağ üstteki ⋮ simgesine dokunup “Kısıtlanmış ayarlara izin ver”i seçin.",
-                            trailing = ui.action("Aç")
-                        ) {
-                            toast("Sağ üstteki ⋮ → Kısıtlanmış ayarlara izin ver")
-                            val i = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                            i.data = Uri.parse("package:$packageName")
-                            startActivity(i)
-                        }
-                    )
-                }
-                ui.addRow(
-                    keys,
-                    ui.row(
-                        "2. Erişilebilirlik izni",
-                        if (granted) "Verildi" else "Gerekli. Listeden “Ses Ustası”nı seçip açın.",
-                        summaryColor = if (granted) pal.inkSoft else pal.danger,
-                        trailing = if (granted) null else ui.action("Aç")
-                    ) {
-                        if (!granted) {
-                            toast("Listeden “Ses Ustası”nı seçip açın")
-                            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                        }
-                    }
-                )
-                ui.addRow(
-                    keys,
-                    ui.row(
-                        "Şu anki yükseltme", "%${Store.keyBoost(this)}",
-                        trailing = ui.action("Sıfırla")
-                    ) {
-                        Store.setKeyBoost(this, 100)
-                        VolumeService.refresh(this)
-                        render()
-                    }
-                )
-            }
-            col.addView(keys)
-        }
-
-        // Mod
-        col.addView(ui.heading("Mod"), ui.lp(ui.wrap, ui.wrap, l = 4, t = 24, b = 8))
-        val mode = ui.section()
-        if (!child) {
-            ui.addRow(
-                mode,
-                ui.row("Ebeveyn modu", "Şifresiz, tam yetki. Yükseltme yalnızca burada.")
-            )
-            val goChild = ui.button("Çocuk moduna geç ve kilitle", Ui.Kind.FILLED) {
+            val pad = ui.vbox()
+            pad.setPadding(dp(16), dp(4), dp(16), dp(16))
+            pad.addView(ui.button("Çocuk moduna geç ve kilitle", Ui.Kind.FILLED) {
                 if (!Store.hasCredential(this)) {
-                    toast("Önce aşağıdan PIN veya desen belirleyin")
+                    toast("Önce aşağıdaki Güvenlik bölümünden PIN veya desen belirleyin")
                 } else {
                     Store.setChildMode(this, true)
                     unlocked = false
                     VolumeService.refresh(this)
                     render()
                 }
-            }
-            val pad = ui.vbox()
-            pad.setPadding(dp(16), dp(4), dp(16), dp(16))
-            pad.addView(goChild, ui.lp(ui.match, ui.wrap))
-            mode.addView(pad)
+            }, ui.lp(ui.match, ui.wrap))
+            kid.addView(pad)
+            col.addView(kid)
         } else {
-            ui.addRow(mode, ui.row("Çocuk modu", "Sesi azaltabilir ya da en fazla %100'e çıkarabilirsiniz."))
+            col.titled("Mod", "Çocuk modundasınız.")
+            val mode = ui.section()
             val pad = ui.vbox()
-            pad.setPadding(dp(16), dp(4), dp(16), dp(16))
+            pad.setPadding(dp(16), dp(16), dp(16), dp(16))
             pad.addView(ui.button("Ebeveyn moduna geç") {
                 Store.setChildMode(this, false)
                 VolumeService.refresh(this)
                 render()
             }, ui.lp(ui.match, ui.wrap))
             mode.addView(pad)
+            col.addView(mode)
+            return sv
         }
-        col.addView(mode)
 
-        // Çocuk modunda güvenlik, ayar ve güncelleme bölümleri gösterilmez
-        if (child) return sv
-
-        // Güvenlik
-        col.addView(ui.heading("Güvenlik"), ui.lp(ui.wrap, ui.wrap, l = 4, t = 24, b = 8))
+        // 4) Güvenlik
+        col.titled("Güvenlik", "Çocuk modunun kilidi ve uygulamanın silinmesine karşı koruma.")
         val sec = ui.section()
         ui.addRow(
             sec,
@@ -329,7 +291,7 @@ class MainActivity : Activity() {
         if (dpm.isAdminActive(admin)) {
             ui.addRow(
                 sec,
-                ui.row("Silinmeye karşı koruma", "Açık", trailing = ui.action("Kapat")) {
+                ui.row("Silinmeye karşı koruma", "Açık: uygulama normal yoldan silinemez", trailing = ui.action("Kapat")) {
                     dpm.removeActiveAdmin(admin)
                     render()
                 }
@@ -350,16 +312,19 @@ class MainActivity : Activity() {
         }
         col.addView(sec)
 
-        // Kesintisiz çalışma
-        col.addView(ui.heading("Kesintisiz çalışma"), ui.lp(ui.wrap, ui.wrap, l = 4, t = 24, b = 8))
+        // 5) Kesintisiz çalışma
+        col.titled("Kesintisiz çalışma", "Telefonun uygulamayı arka planda uyutmasını önler ve pil tüketimini azaltır.")
         val run = ui.section()
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         if (pm.isIgnoringBatteryOptimizations(packageName)) {
-            ui.addRow(run, ui.row("Pil kısıtlaması", "Kapalı, uygulama uyutulmaz"))
+            ui.addRow(run, ui.row("Pil kısıtlaması", "Kapalı: uygulama uyutulmaz"))
         } else {
             ui.addRow(
                 run,
-                ui.row("Pil kısıtlaması", "Açık. Kesintisiz çalışma için kaldırın.", trailing = ui.action("Kaldır")) {
+                ui.row(
+                    "Pil kısıtlaması", "Açık: Android uygulamayı uyutabilir. Kaldırmanız önerilir.",
+                    summaryColor = pal.danger, trailing = ui.action("Kaldır")
+                ) {
                     val i = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
                     i.data = Uri.parse("package:$packageName")
                     startActivity(i)
@@ -369,19 +334,23 @@ class MainActivity : Activity() {
         ui.addRow(
             run,
             ui.row(
-                "Pil tasarrufu", "Ekran kapalıyken denetimi seyreltir, mod kapalıyken hiç uyanmaz. Ses yine anında geri çekilir.",
+                "Pil tasarrufu", "Ekran kapalıyken denetimi seyreltir. Ses yine anında geri çekilir.",
                 trailing = styledSwitch(Store.saver(this)) { on ->
                     Store.setSaver(this, on)
                     VolumeService.refresh(this)
                 }
             )
         )
-        ui.addRow(run, ui.row("Hızlı ayarlar kutucuğu", "Bildirim panelini düzenleyip “Ses Ustası” kutucuğunu ekleyin; tek dokunuşla Normal ↔ Özel geçer."))
+        ui.addRow(run, ui.row("Hızlı ayarlar kutucuğu", "Bildirim panelini düzenleyip “Ses Ustası” kutucuğunu ekleyin; tek dokunuşla Telefonun ayarı ↔ Özel ayarım geçer."))
         oemTip()?.let { ui.addRow(run, ui.row("Cihazınıza özel", it)) }
         col.addView(run)
 
-        // Güncelleme
-        col.addView(ui.heading("Güncelleme"), ui.lp(ui.wrap, ui.wrap, l = 4, t = 24, b = 8))
+        // 6) Durum kontrolü
+        col.titled("Durum kontrolü", "Bir şey çalışmıyorsa nedenini buradan okuyun.")
+        col.addView(diagSection(free))
+
+        // 7) Güncelleme
+        col.titled("Güncelleme", "Yeni sürümü GitHub'dan alır. Otomatik açıkken siz bir şey yapmazsınız.")
         val box = ui.section()
         updateBox = box
         col.addView(box)
@@ -390,99 +359,141 @@ class MainActivity : Activity() {
         return sv
     }
 
-    /** Seviye kartı: Normal/Özel seçici, büyük değer, kaydırıcı. */
-    private fun levelCard(child: Boolean, special: Boolean): View {
+    // ---------- Ses kartı ----------
+
+    /** Ses kartı: (1) kim yönetir, (2) nasıl çalışır, (3) değer ve kaydırıcı. */
+    private fun levelCard(child: Boolean, special: Boolean, master: Boolean, free: Boolean): View {
         val card = ui.section()
         val inner = ui.vbox()
         inner.setPadding(dp(20), dp(16), dp(20), dp(12))
 
-        inner.addView(segmented(special), ui.lp(ui.match, ui.wrap))
-
-        val readout = LinearLayout(this)
-        readout.orientation = LinearLayout.HORIZONTAL
-        readout.gravity = Gravity.BOTTOM
-        val big = ui.text("", 56f, pal.ink, Ui.MEDIUM)
-        big.includeFontPadding = false
-        val pct = ui.text("%", 24f, pal.inkSoft, Ui.MEDIUM)
-        pct.includeFontPadding = false
-        val tag = ui.text("", 13f, pal.boost, Ui.MEDIUM)
-        tag.setPadding(dp(10), dp(4), dp(10), dp(4))
-        tag.visibility = View.GONE
-        readout.addView(big)
-        readout.addView(pct, ui.lp(ui.wrap, ui.wrap, l = 4, b = 6))
-        readout.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-        readout.addView(tag, ui.lp(ui.wrap, ui.wrap, b = 8))
-        inner.addView(readout, ui.lp(ui.match, ui.wrap, t = 20))
-
-        val hint = ui.small("")
-        inner.addView(hint, ui.lp(ui.match, ui.wrap, t = 4))
-
-        val keyOn = !child && Store.keyMode(this)
-        fun show(v: Int) {
-            big.text = v.toString()
-            if (v > 100) {
-                tag.text = "Yükseltme +${VolumeMath.gainMb(v) / 100} dB"
-                tag.background = ui.rounded(pal.boostSoft, 12)
-                tag.visibility = View.VISIBLE
-                hint.text = "Telefon sesi maksimumda, üstüne yükseltme eklenir"
-            } else {
-                tag.visibility = View.GONE
-                hint.text = if (keyOn) "Ses tuşuyla en yükseğe çıkın, sonra basmaya devam edin"
-                else if (child) "Telefon sesinin %$v kadarına kilitlenir"
-                else "Telefon sesi bu oranda kilitlenir"
+        if (!child) {
+            inner.addView(
+                segmented(listOf("Telefonun ayarı", "Özel ayarım"), if (special) 1 else 0) { i ->
+                    if (!Store.master(this)) {
+                        toast("Önce yukarıdan uygulamayı açın")
+                    } else {
+                        Store.setSpecial(this, i == 1)
+                        VolumeService.refresh(this)
+                        render()
+                    }
+                },
+                ui.lp(ui.match, ui.wrap)
+            )
+            inner.addView(
+                ui.small(
+                    if (!special) "Uygulama ses işine karışmaz; telefon her zamanki gibi çalışır."
+                    else "Uygulamanın ses ayarı geçerli."
+                ),
+                ui.lp(ui.match, ui.wrap, t = 8)
+            )
+            if (special) {
+                inner.addView(
+                    segmented(listOf("Sabit seviye", "Tuşlarla serbest"), if (free) 1 else 0) { i ->
+                        Store.setKeyMode(this, i == 1)
+                        Store.setKeyBoost(this, 100)
+                        VolumeService.refresh(this)
+                        render()
+                    },
+                    ui.lp(ui.match, ui.wrap, t = 16)
+                )
+                inner.addView(
+                    ui.small(
+                        if (free) "Ses tuşlarını her zamanki gibi kullanın. Telefon sesi en yükseğe çıkınca " +
+                            "ses artır tuşuna basmaya devam edin: ses telefonun sınırının ötesine yükselir. " +
+                            "Aşağıdaki çubukla da ayarlayabilirsiniz."
+                        else "Ses seçtiğiniz seviyede kilitlenir. Tuşlara basılsa bile geri çekilir."
+                    ),
+                    ui.lp(ui.match, ui.wrap, t = 8)
+                )
             }
         }
-        if (keyOn) {
-            show(Store.keyBoost(this))
-        } else {
-            inner.addView(slider(child) { v -> show(v) }, ui.lp(ui.match, ui.wrap, t = 8))
-        }
 
-        if (child) {
-            inner.addView(
-                ui.small("En fazla %100. Yükseltme yalnızca ebeveyn modunda vardır."),
-                ui.lp(ui.match, ui.wrap, t = 4)
-            )
-        } else {
-            val warn = ui.text(
-                "Yükseltme: " + Store.boostStatus(this) + ". %200 üzeri hoparlöre ve kulağa zarar verebilir.",
-                12f, pal.inkSoft
-            )
-            inner.addView(warn, ui.lp(ui.match, ui.wrap, t = 4))
+        if (child || special) {
+            val readout = LinearLayout(this)
+            readout.orientation = LinearLayout.HORIZONTAL
+            readout.gravity = Gravity.BOTTOM
+            val big = ui.text("", 56f, pal.ink, Ui.MEDIUM)
+            big.includeFontPadding = false
+            val pct = ui.text("%", 24f, pal.inkSoft, Ui.MEDIUM)
+            pct.includeFontPadding = false
+            val tag = ui.text("", 13f, pal.boost, Ui.MEDIUM)
+            tag.setPadding(dp(10), dp(4), dp(10), dp(4))
+            tag.visibility = View.GONE
+            readout.addView(big)
+            readout.addView(pct, ui.lp(ui.wrap, ui.wrap, l = 4, b = 6))
+            readout.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+            readout.addView(tag, ui.lp(ui.wrap, ui.wrap, b = 8))
+            inner.addView(readout, ui.lp(ui.match, ui.wrap, t = 20))
+
+            val hint = ui.small("")
+            inner.addView(hint, ui.lp(ui.match, ui.wrap, t = 4))
+
+            fun show(v: Int) {
+                big.text = v.toString()
+                if (v > 100) {
+                    tag.text = "Yükseltme +${VolumeMath.gainMb(v) / 100} dB"
+                    tag.background = ui.rounded(pal.boostSoft, 12)
+                    tag.visibility = View.VISIBLE
+                    if (v > VolumeMath.SAFE_BOOST) {
+                        hint.text = "Dikkat: %${VolumeMath.SAFE_BOOST} üstünde ses bozulabilir, hoparlöre ve kulağa zarar verebilir."
+                        hint.setTextColor(pal.danger)
+                    } else {
+                        hint.text = "Telefon sesi en yüksekte, üstüne yükseltme ekleniyor."
+                        hint.setTextColor(pal.inkSoft)
+                    }
+                } else {
+                    tag.visibility = View.GONE
+                    hint.setTextColor(pal.inkSoft)
+                    hint.text = when {
+                        free -> "Telefonun kendi sesi. %100 çubuğun sonu değil, yükseltmenin başlangıcıdır."
+                        child -> "Telefon sesinin %$v kadarına kilitli."
+                        else -> "Telefon sesi bu oranda kilitli."
+                    }
+                }
+            }
+
+            val kind = when {
+                child -> SliderKind.LOCK_CHILD
+                free -> SliderKind.FREE
+                else -> SliderKind.LOCK_PARENT
+            }
+            inner.addView(slider(kind) { v -> show(v) }, ui.lp(ui.match, ui.wrap, t = 8))
+
+            if (!master) {
+                inner.addView(
+                    ui.text("Uygulama kapalı: seçimler uygulanmaz.", 12f, pal.danger),
+                    ui.lp(ui.match, ui.wrap, t = 4)
+                )
+            } else if (!child) {
+                inner.addView(
+                    ui.text("Yükseltme durumu: " + Store.boostStatus(this), 12f, pal.inkSoft),
+                    ui.lp(ui.match, ui.wrap, t = 4)
+                )
+            }
         }
         card.addView(inner)
         return card
     }
 
-    private fun segmented(special: Boolean): View {
-        val wrapBox = LinearLayout(this)
-        wrapBox.orientation = LinearLayout.HORIZONTAL
-        wrapBox.setPadding(dp(4), dp(4), dp(4), dp(4))
-        wrapBox.background = ui.rounded(pal.surfaceHi, 16)
-
-        fun seg(label: String, selected: Boolean, target: Boolean): TextView {
-            val t = ui.text(label, 14f, if (selected) pal.onAccent else pal.ink, Ui.MEDIUM)
+    private fun segmented(labels: List<String>, selected: Int, onSelect: (Int) -> Unit): View {
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.HORIZONTAL
+        box.setPadding(dp(4), dp(4), dp(4), dp(4))
+        box.background = ui.rounded(pal.surfaceHi, 16)
+        labels.forEachIndexed { i, label ->
+            val sel = i == selected
+            val t = ui.text(label, 14f, if (sel) pal.onAccent else pal.ink, Ui.MEDIUM)
             t.gravity = Gravity.CENTER
             t.minHeight = dp(44)
             t.setPadding(dp(8), dp(8), dp(8), dp(8))
-            if (selected) t.background = ui.rounded(pal.accent, 12)
+            if (sel) t.background = ui.rounded(pal.accent, 12)
             t.isClickable = true
             t.isFocusable = true
-            t.setOnClickListener {
-                if (selected) return@setOnClickListener
-                if (!Store.master(this)) {
-                    toast("Önce uygulamayı aktif edin")
-                } else {
-                    Store.setSpecial(this, target)
-                    VolumeService.refresh(this)
-                    render()
-                }
-            }
-            return t
+            t.setOnClickListener { if (!sel) onSelect(i) }
+            box.addView(t, LinearLayout.LayoutParams(0, ui.wrap, 1f))
         }
-        wrapBox.addView(seg("Telefonun ayarı", !special, false), LinearLayout.LayoutParams(0, ui.wrap, 1f))
-        wrapBox.addView(seg("Özel ayarım", special, true), LinearLayout.LayoutParams(0, ui.wrap, 1f))
-        return wrapBox
+        return box
     }
 
     private fun styledSwitch(on: Boolean, change: (Boolean) -> Unit): Switch {
@@ -498,9 +509,26 @@ class MainActivity : Activity() {
 
     private var lastPush = 0L
 
-    /** Kaydırıcı: 0-100 normal bölge, üstü yükseltme bölgesi (renk değişir, 100'de işaret var). */
-    private fun slider(child: Boolean, onValue: (Int) -> Unit): View {
-        val max = if (child) 100 else 500
+    /** Serbest modda çubuk: 0-100 doğrudan telefon sesi, 100 üstü telefon sesi en yüksek + yükseltme. */
+    private fun applyFree(p: Int) {
+        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        try {
+            if (p > 100) {
+                am.setStreamVolume(AudioManager.STREAM_MUSIC, max, 0)
+                Store.setKeyBoost(this, p)
+            } else {
+                Store.setKeyBoost(this, 100)
+                am.setStreamVolume(AudioManager.STREAM_MUSIC, VolumeMath.targetVol(p, max), 0)
+            }
+        } catch (e: SecurityException) {
+        }
+    }
+
+    /** Kaydırıcı: 0-100 telefonun kendi sesi, üstü yükseltme bölgesi (renk değişir, işaret %100'de). */
+    private fun slider(kind: SliderKind, onValue: (Int) -> Unit): View {
+        val child = kind == SliderKind.LOCK_CHILD
+        val max = if (child) VolumeMath.MAX_CHILD else VolumeMath.MAX_PARENT
         val frame = FrameLayout(this)
 
         val track = GradientDrawable()
@@ -536,57 +564,193 @@ class MainActivity : Activity() {
             onValue(v)
         }
 
-        val cur = Store.level(this, child)
+        val cur = when (kind) {
+            SliderKind.FREE -> {
+                val boost = Store.keyBoost(this)
+                if (boost > 100) boost else {
+                    val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                    VolumeMath.percentOf(
+                        am.getStreamVolume(AudioManager.STREAM_MUSIC),
+                        am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                    )
+                }
+            }
+            else -> Store.level(this, child)
+        }
         sb.progress = cur
         paint(cur)
+
+        fun commit(p: Int) {
+            if (kind == SliderKind.FREE) applyFree(p) else Store.setLevel(this, child, p)
+            VolumeService.refresh(this)
+        }
 
         sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) {
                 paint(p)
                 if (!fromUser) return
-                Store.setLevel(this@MainActivity, child, p)
                 val now = System.currentTimeMillis()
                 if (now - lastPush > 150) {
                     lastPush = now
-                    VolumeService.refresh(this@MainActivity)
+                    commit(p)
                 }
             }
 
             override fun onStartTrackingTouch(s: SeekBar) {}
 
             override fun onStopTrackingTouch(s: SeekBar) {
-                Store.setLevel(this@MainActivity, child, s.progress)
-                VolumeService.refresh(this@MainActivity)
+                commit(s.progress)
             }
         })
         frame.addView(sb, FrameLayout.LayoutParams(ui.match, dp(48), Gravity.CENTER_VERTICAL))
 
-        if (!child) {
-            // %100 işareti: normal bölge ile yükseltme bölgesinin sınırı
-            val tick = View(this)
-            tick.setBackgroundColor(pal.inkSoft)
-            frame.addView(tick, FrameLayout.LayoutParams(dp(2), dp(20), Gravity.CENTER_VERTICAL))
-            sb.addOnLayoutChangeListener { v, l, _, r, _, _, _, _, _ ->
-                val avail = (r - l) - v.paddingLeft - v.paddingRight
-                tick.translationX = v.paddingLeft + avail * 100f / max - dp(1)
-            }
-            val scale = LinearLayout(this)
-            scale.orientation = LinearLayout.HORIZONTAL
-            // Etiketler kaydırıcıdan sonra, ayrı satırda
-            val wrapCol = ui.vbox()
-            wrapCol.addView(frame)
-            scale.setPadding(dp(16), 0, dp(16), 0)
-            scale.addView(ui.small("0"), LinearLayout.LayoutParams(0, ui.wrap, 1f))
-            scale.addView(ui.small("500"))
-            wrapCol.addView(scale)
-            return wrapCol
+        if (child) return frame
+
+        // %100 işareti: telefonun kendi sınırı ile yükseltme bölgesinin sınırı
+        val tick = View(this)
+        tick.setBackgroundColor(pal.inkSoft)
+        frame.addView(tick, FrameLayout.LayoutParams(dp(2), dp(20), Gravity.CENTER_VERTICAL))
+        sb.addOnLayoutChangeListener { v, l, _, r, _, _, _, _, _ ->
+            val avail = (r - l) - v.paddingLeft - v.paddingRight
+            tick.translationX = v.paddingLeft + avail * 100f / max - dp(1)
         }
-        return frame
+        val scale = LinearLayout(this)
+        scale.orientation = LinearLayout.HORIZONTAL
+        scale.setPadding(dp(16), 0, dp(16), 0)
+        scale.addView(ui.small("0"), LinearLayout.LayoutParams(0, ui.wrap, 1f))
+        scale.addView(ui.small("İşaret: telefonun sınırı (%100)  ·  $max"))
+        val wrapCol = ui.vbox()
+        wrapCol.addView(frame)
+        wrapCol.addView(scale)
+        return wrapCol
     }
+
+    // ---------- Tuş hizmeti ve durum kontrolü ----------
 
     private fun keyServiceEnabled(): Boolean {
         val v = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
         return v.contains(packageName + "/" + VolumeKeyService::class.java.name)
+    }
+
+    private fun keyServiceSection(): View {
+        val keys = ui.section()
+        val granted = keyServiceEnabled()
+        if (!granted) {
+            ui.addRow(
+                keys,
+                ui.row(
+                    "1. Kısıtlamayı kaldırın",
+                    "Android, dışarıdan kurulan uygulamalarda erişilebilirliği engeller. Açılan sayfada sağ üstteki ⋮ simgesine dokunup “Kısıtlanmış ayarlara izin ver”i seçin.",
+                    trailing = ui.action("Aç")
+                ) {
+                    toast("Sağ üstteki ⋮ → Kısıtlanmış ayarlara izin ver")
+                    val i = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    i.data = Uri.parse("package:$packageName")
+                    startActivity(i)
+                }
+            )
+        }
+        ui.addRow(
+            keys,
+            ui.row(
+                "2. Erişilebilirlik izni",
+                if (granted) "Verildi" else "Gerekli. Listeden “Ses Ustası”nı seçip açın.",
+                summaryColor = if (granted) pal.inkSoft else pal.danger,
+                trailing = if (granted) null else ui.action("Aç")
+            ) {
+                if (!granted) {
+                    toast("Listeden “Ses Ustası”nı seçip açın")
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }
+            }
+        )
+        ui.addRow(
+            keys,
+            ui.row(
+                "Nasıl kullanılır",
+                "Müzik ya da video açın. Ses artır tuşuyla telefonun sesini en yükseğe çıkarın, sonra basmaya devam edin: ekranın üstünde yüzde görünür. Ses azalt tuşu önce yükseltmeyi azaltır."
+            )
+        )
+        ui.addRow(
+            keys,
+            ui.row(
+                "Şu anki yükseltme",
+                if (Store.keyBoost(this) > 100) "%${Store.keyBoost(this)}" else "Yok",
+                trailing = if (Store.keyBoost(this) > 100) ui.action("Sıfırla") else null
+            ) {
+                if (Store.keyBoost(this) > 100) {
+                    Store.setKeyBoost(this, 100)
+                    VolumeService.refresh(this)
+                    render()
+                }
+            }
+        )
+        return keys
+    }
+
+    /** Bir şey çalışmıyorsa nedenini gösteren satırlar. */
+    private fun diagSection(free: Boolean): View {
+        val sec = ui.section()
+        val master = Store.master(this)
+        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+        // Arka plan servisi
+        when {
+            !master -> ui.addRow(sec, ui.row("Arka plan servisi", "Kapalı: uygulama anahtarı kapalı"))
+            VolumeService.running -> ui.addRow(sec, ui.row("Arka plan servisi", "Tamam: çalışıyor"))
+            else -> ui.addRow(
+                sec,
+                ui.row(
+                    "Arka plan servisi", "Sorun: durmuş görünüyor. Dokunup yeniden başlatın.",
+                    summaryColor = pal.danger, trailing = ui.action("Başlat")
+                ) {
+                    VolumeService.refresh(this)
+                    toast("Yeniden başlatıldı; birkaç saniye sonra Yenile'ye dokunun")
+                }
+            )
+        }
+
+        // Yükseltme efekti
+        val boosting = (if (free) Store.keyBoost(this) else Store.activeLevel(this)) > 100
+        ui.addRow(
+            sec,
+            ui.row(
+                "Yükseltme efekti",
+                if (boosting) Store.boostStatus(this) else "Şu an yükseltme istenmiyor",
+                summaryColor = if (boosting && Store.boostStatus(this).startsWith("Bu cihaz")) pal.danger else pal.inkSoft
+            )
+        )
+
+        // Tuş hizmeti
+        if (free) {
+            val enabled = keyServiceEnabled()
+            when {
+                !enabled -> ui.addRow(
+                    sec,
+                    ui.row("Tuş hizmeti", "Sorun: izin verilmemiş. Yukarıdaki “Tuş hizmeti” adımlarını izleyin.", summaryColor = pal.danger)
+                )
+                !VolumeKeyService.connected -> ui.addRow(
+                    sec,
+                    ui.row(
+                        "Tuş hizmeti",
+                        "Sorun: izin açık ama hizmet bağlı değil. Erişilebilirlik ayarlarında Ses Ustası'nı kapatıp tekrar açın.",
+                        summaryColor = pal.danger, trailing = ui.action("Aç")
+                    ) { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+                )
+                else -> ui.addRow(sec, ui.row("Tuş hizmeti", "Tamam: bağlı"))
+            }
+            ui.addRow(
+                sec,
+                ui.row(
+                    "Medya",
+                    if (am.isMusicActive) "Tamam: şu an çalıyor"
+                    else "Çalmıyor. Tuşla yükseltme yalnızca medya çalarken (ya da son 10 sn içinde çalmışken) devreye girer."
+                )
+            )
+        }
+
+        ui.addRow(sec, ui.row("Yenile", "Bu kutudaki durumları günceller", trailing = ui.action("Yenile")) { render() })
+        return sec
     }
 
     /** Marka bazlı pil/otomatik başlatma yönergesi. */

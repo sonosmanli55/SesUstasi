@@ -22,15 +22,35 @@ import android.widget.Toast
  */
 class VolumeKeyService : AccessibilityService() {
 
+    companion object {
+        /** Hizmet Android tarafından bağlandı mı? (tanı ekranı için) */
+        @Volatile
+        var connected = false
+
+        /** Medya durakladıktan sonra tuşların hâlâ yükseltme için sayıldığı süre. */
+        private const val MUSIC_GRACE_MS = 10_000L
+    }
+
     private val h = Handler(Looper.getMainLooper())
     private var label: TextView? = null
     private val hideLabel = Runnable { removeLabel() }
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        connected = true
+    }
+
+    override fun onUnbind(intent: android.content.Intent?): Boolean {
+        connected = false
+        return super.onUnbind(intent)
+    }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        connected = false
         h.removeCallbacks(hideLabel)
         removeLabel()
         super.onDestroy()
@@ -47,29 +67,31 @@ class VolumeKeyService : AccessibilityService() {
         val vol = am.getStreamVolume(AudioManager.STREAM_MUSIC)
         val boost = Store.keyBoost(this)
 
-        // Medya çalmıyorsa tuşlar zil sesini ayarlıyordur: karışma. Yalnızca en yüksekte ve artırırken ipucu göster.
-        if (!am.isMusicActive) {
+        // Medya çalmıyorsa (ya da yeni durakladıysa) tuşlar zil sesini ayarlıyor olabilir.
+        // Kısa duraklamalar ve parça geçişleri tuşu kaçırmasın diye 10 sn'lik tolerans var.
+        val now = System.currentTimeMillis()
+        if (am.isMusicActive) VolumeService.lastMusic = now
+        val mediaRecent = now - VolumeService.lastMusic < MUSIC_GRACE_MS
+        if (!mediaRecent) {
             if (code == KeyEvent.KEYCODE_VOLUME_UP && vol >= max && ev.action == KeyEvent.ACTION_DOWN) {
                 show("Yükseltme için müzik ya da video çalmalı", false)
             }
             return false
         }
 
-        val delta: Int = if (code == KeyEvent.KEYCODE_VOLUME_UP) {
-            if (vol < max) return false
-            VolumeMath.BOOST_STEP
-        } else {
-            if (boost <= 100) return false
-            -VolumeMath.BOOST_STEP
-        }
+        val up = code == KeyEvent.KEYCODE_VOLUME_UP
+        if (up && vol < max) return false          // normal aralık: telefon kendi halleder
+        if (!up && boost <= 100) return false      // yükseltme yok: telefon kendi halleder
+
         if (ev.action == KeyEvent.ACTION_DOWN) {
-            val next = VolumeMath.stepBoost(boost, delta)
+            val next = VolumeMath.boostStep(boost, up)
             if (next != boost) {
                 Store.setKeyBoost(this, next)
                 VolumeService.refresh(this)
             }
             val text = when {
-                next > 100 && next >= VolumeMath.MAX_PARENT -> "Ses %$next (+${VolumeMath.gainMb(next) / 100} dB)  en fazla"
+                next > 100 && next >= VolumeMath.MAX_PARENT ->
+                    "Ses %$next (+${VolumeMath.gainMb(next) / 100} dB)  en fazla"
                 next > 100 -> "Ses %$next (+${VolumeMath.gainMb(next) / 100} dB)"
                 else -> "Ses %100 (normal en yüksek)"
             }

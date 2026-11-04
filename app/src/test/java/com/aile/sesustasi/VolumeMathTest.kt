@@ -9,8 +9,8 @@ class VolumeMathTest {
         assertEquals(0, VolumeMath.clampLevel(true, -5))
     }
 
-    @Test fun parentCappedAt500() {
-        assertEquals(500, VolumeMath.clampLevel(false, 900))
+    @Test fun parentCappedAt1000() {
+        assertEquals(1000, VolumeMath.clampLevel(false, 5000))
         assertEquals(250, VolumeMath.clampLevel(false, 250))
     }
 
@@ -24,6 +24,13 @@ class VolumeMathTest {
         assertEquals(15, VolumeMath.targetVol(300, 15))
     }
 
+    @Test fun percentOfVolume() {
+        assertEquals(0, VolumeMath.percentOf(0, 15))
+        assertEquals(100, VolumeMath.percentOf(15, 15))
+        assertEquals(53, VolumeMath.percentOf(8, 15))
+        assertEquals(0, VolumeMath.percentOf(5, 0))
+    }
+
     @Test fun noGainAtOrBelow100() {
         assertEquals(0, VolumeMath.gainMb(100))
         assertEquals(0, VolumeMath.gainMb(40))
@@ -32,11 +39,16 @@ class VolumeMathTest {
     @Test fun gainGrowsAbove100() {
         assertEquals(602, VolumeMath.gainMb(200))
         assertEquals(1397, VolumeMath.gainMb(500))
+        assertEquals(2000, VolumeMath.gainMb(1000))
     }
 
-    @Test fun boostStepClamps() {
-        assertEquals(125, VolumeMath.stepBoost(100, VolumeMath.BOOST_STEP))
-        assertEquals(100, VolumeMath.stepBoost(100, -VolumeMath.BOOST_STEP))
-        assertEquals(500, VolumeMath.stepBoost(500, VolumeMath.BOOST_STEP))
+    @Test fun boostStepUpAndDown() {
+        assertEquals(125, VolumeMath.boostStep(100, true))
+        assertEquals(100, VolumeMath.boostStep(100, false))
+        assertEquals(350, VolumeMath.boostStep(300, true))
+        assertEquals(300, VolumeMath.boostStep(350, false))
+        assertEquals(275, VolumeMath.boostStep(300, false))
+        assertEquals(300, VolumeMath.boostStep(275, true))
+        assertEquals(1000, VolumeMath.boostStep(1000, true))
     }
 }

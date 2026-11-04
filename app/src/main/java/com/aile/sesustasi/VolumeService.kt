@@ -35,6 +35,14 @@ class VolumeService : Service() {
         private const val CH = "ses_kanal"
         private const val NID = 17
 
+        /** Medyanın en son çaldığı an (ms). Tuş hizmeti, kısa duraklamalarda tuşu kaçırmasın diye kullanır. */
+        @Volatile
+        var lastMusic = 0L
+
+        /** Servisin şu an çalışıp çalışmadığı (tanı ekranı için). */
+        @Volatile
+        var running = false
+
         fun refresh(c: Context) {
             val i = Intent(c, VolumeService::class.java).setAction(ACTION_REFRESH)
             try {
@@ -57,7 +65,7 @@ class VolumeService : Service() {
     /** Yoklama aralığı: pil tasarrufu açıkken ekran kapalıyken ve tuş modunda seyrek. Anlık tepki yine olay dinleyicilerinden gelir. */
     private fun interval(): Long {
         if (!Store.saver(this)) return 400L
-        if (keyModeOn()) return 3000L
+        if (keyModeOn()) return 1500L
         return if (pm.isInteractive) 600L else 2500L
     }
 
@@ -68,6 +76,7 @@ class VolumeService : Service() {
             try {
                 enforce()
                 val now = System.currentTimeMillis()
+                if (am.isMusicActive) lastMusic = now
                 if (gainMb > 0 && now - lastFx > 4000L) {
                     lastFx = now
                     ensureEffects()
@@ -123,6 +132,7 @@ class VolumeService : Service() {
         super.onCreate()
         am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        running = true
         UpdateJob.sync(this)
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(
@@ -156,6 +166,7 @@ class VolumeService : Service() {
     }
 
     override fun onDestroy() {
+        running = false
         h.removeCallbacks(tick)
         try {
             unregisterReceiver(volumeRx)
