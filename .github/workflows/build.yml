@@ -1,0 +1,63 @@
+name: APK derle
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Birim testleri
+        run: gradle testDebugUnitTest --no-daemon
+
+      - name: Sabit imza anahtarını hazırla
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          else
+            echo "::warning::KEYSTORE_B64 secret'ı yok: APK debug anahtarıyla imzalanacak, telefonda güncellemeler imza uyuşmazlığı verebilir."
+          fi
+
+      - name: APK derle
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: >
+          gradle assembleRelease --no-daemon
+          -PbuildNumber=${{ github.run_number }}
+          -PrepoSlug=${{ github.repository }}
+
+      - name: APK adını düzenle
+        run: cp app/build/outputs/apk/release/app-release.apk SesUstasi.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SesUstasi-apk
+          path: SesUstasi.apk
+
+      - name: Sürüm olarak yayınla (güncelleme denetleyicisi bunu okur)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ github.run_number }}" SesUstasi.apk \
+            --title "Sürüm ${{ github.run_number }}" \
+            --notes "${{ github.event.head_commit.message }}" \
+            --latest
