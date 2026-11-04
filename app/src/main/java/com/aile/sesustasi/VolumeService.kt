@@ -19,6 +19,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 
 /**
@@ -50,19 +51,38 @@ class VolumeService : Service() {
     private val sessionEnh = HashMap<Int, LoudnessEnhancer>()
     private val openSessions = HashSet<Int>()
     private var gainMb = 0
-    private var tickCount = 0
+    private lateinit var pm: PowerManager
+    private var lastFx = 0L
+
+    /** Yoklama aralığı: pil tasarrufu açıkken ekran kapalıyken ve tuş modunda seyrek. Anlık tepki yine olay dinleyicilerinden gelir. */
+    private fun interval(): Long {
+        if (!Store.saver(this)) return 400L
+        if (keyModeOn()) return 3000L
+        return if (pm.isInteractive) 600L else 2500L
+    }
 
     private val tick = object : Runnable {
         override fun run() {
+            // Uygulama kapalı ya da "telefonun normal ayarı" seçiliyken hiç uyanma: döngü durur.
+            if (!Store.master(this@VolumeService) || !Store.special(this@VolumeService)) return
             try {
-                if (Store.master(this@VolumeService) && Store.special(this@VolumeService)) {
-                    enforce()
-                    tickCount++
-                    if (tickCount % 8 == 0) ensureEffects()
+                enforce()
+                val now = System.currentTimeMillis()
+                if (gainMb > 0 && now - lastFx > 4000L) {
+                    lastFx = now
+                    ensureEffects()
                 }
             } catch (e: Throwable) {
             }
-            h.postDelayed(this, 400)
+            h.postDelayed(this, interval())
+        }
+    }
+
+    private val screenRx = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) {
+            // Ekran açılınca hemen denetle ve sık aralığa dön.
+            h.removeCallbacks(tick)
+            if (Store.master(c) && Store.special(c)) h.post(tick)
         }
     }
 
@@ -102,6 +122,7 @@ class VolumeService : Service() {
     override fun onCreate() {
         super.onCreate()
         am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(
             NotificationChannel(CH, "Ses Ustası", NotificationManager.IMPORTANCE_LOW)
@@ -115,12 +136,13 @@ class VolumeService : Service() {
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(volumeRx, vf, Context.RECEIVER_EXPORTED)
             registerReceiver(effectRx, ef, Context.RECEIVER_EXPORTED)
+            registerReceiver(screenRx, IntentFilter(Intent.ACTION_SCREEN_ON), Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(volumeRx, vf)
             registerReceiver(effectRx, ef)
+            registerReceiver(screenRx, IntentFilter(Intent.ACTION_SCREEN_ON))
         }
         contentResolver.registerContentObserver(Settings.System.CONTENT_URI, true, observer)
-        h.post(tick)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -137,6 +159,7 @@ class VolumeService : Service() {
         try {
             unregisterReceiver(volumeRx)
             unregisterReceiver(effectRx)
+            unregisterReceiver(screenRx)
             contentResolver.unregisterContentObserver(observer)
         } catch (e: Throwable) {
         }
@@ -147,10 +170,12 @@ class VolumeService : Service() {
     // ---------- Ana mantık ----------
 
     private fun apply() {
+        h.removeCallbacks(tick)
         if (!Store.master(this)) {
             shutdown()
             return
         }
+        if (Store.special(this)) h.post(tick)
         if (Store.special(this)) {
             if (!Store.engaged(this)) {
                 Store.setNormalVol(this, am.getStreamVolume(AudioManager.STREAM_MUSIC))

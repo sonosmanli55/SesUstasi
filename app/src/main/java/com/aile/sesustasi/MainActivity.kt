@@ -350,6 +350,16 @@ class MainActivity : Activity() {
                 }
             )
         }
+        ui.addRow(
+            run,
+            ui.row(
+                "Pil tasarrufu", "Ekran kapalıyken denetimi seyreltir, mod kapalıyken hiç uyanmaz. Ses yine anında geri çekilir.",
+                trailing = styledSwitch(Store.saver(this)) { on ->
+                    Store.setSaver(this, on)
+                    VolumeService.refresh(this)
+                }
+            )
+        )
         ui.addRow(run, ui.row("Hızlı ayarlar kutucuğu", "Bildirim panelini düzenleyip “Ses Ustası” kutucuğunu ekleyin; tek dokunuşla Normal ↔ Özel geçer."))
         oemTip()?.let { ui.addRow(run, ui.row("Cihazınıza özel", it)) }
         col.addView(run)

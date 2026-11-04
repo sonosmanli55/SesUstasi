@@ -58,7 +58,13 @@ object Store {
 
     // Yükseltme durumu (arayüzde gösterilir)
     fun boostStatus(c: Context) = p(c).getString("boost_status", "Yükseltme kapalı") ?: ""
-    fun setBoostStatus(c: Context, s: String) = p(c).edit().putString("boost_status", s).apply()
+    fun setBoostStatus(c: Context, s: String) {
+        if (boostStatus(c) != s) p(c).edit().putString("boost_status", s).apply()
+    }
+
+    // Pil tasarrufu: yoklamayı ekran kapalıyken / tuş modunda seyreltir (varsayılan açık)
+    fun saver(c: Context) = p(c).getBoolean("saver", true)
+    fun setSaver(c: Context, v: Boolean) = p(c).edit().putBoolean("saver", v).apply()
 
     // --- PIN / desen ---
     private fun salt(c: Context): String {
