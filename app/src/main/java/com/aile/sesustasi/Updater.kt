@@ -159,11 +159,45 @@ object Updater {
                 }
                 if (file.length() < 100_000) throw IOException("İndirilen dosya eksik görünüyor.")
                 install(ctx, file)
-                setState(State.INSTALLING, "Kurulum onayı bekleniyor. Açılan pencerede “Güncelle”ye dokunun.")
+                setState(State.INSTALLING, "Android'in onay penceresi bekleniyor. Açılan pencerede “Güncelle”ye dokunun.")
+                armInstallTimeout()
             } catch (e: Exception) {
                 setState(State.ERROR, e.message ?: "İndirme başarısız.")
             }
         }.start()
+    }
+
+    /** Onay penceresi hiç açılmazsa düğme sonsuza dek kilitli kalmasın. */
+    private fun armInstallTimeout() {
+        main.postDelayed({
+            if (state == State.INSTALLING) {
+                setState(
+                    State.AVAILABLE,
+                    "Onay penceresi açılmadı. “Tekrar dene”ye dokunun; olmazsa bildirim gölgesindeki “güncelleme hazır” bildirimine bakın."
+                )
+            }
+        }, 45_000L)
+    }
+
+    /** İndirilmiş APK varsa yeniden kurulum oturumu açar, yoksa baştan indirir. */
+    fun retryInstall(c: Context) {
+        if (state == State.DOWNLOADING) return
+        val ctx = c.applicationContext
+        val file = File(ctx.cacheDir, "update.apk")
+        if (file.exists() && file.length() > 100_000) {
+            setState(State.INSTALLING, "Android'in onay penceresi bekleniyor. Açılan pencerede “Güncelle”ye dokunun.")
+            Thread {
+                try {
+                    install(ctx, file)
+                    armInstallTimeout()
+                } catch (e: Exception) {
+                    setState(State.ERROR, e.message ?: "Kurulum başlatılamadı.")
+                }
+            }.start()
+        } else {
+            setState(State.AVAILABLE)
+            downloadAndInstall(ctx)
+        }
     }
 
     /**
@@ -209,14 +243,25 @@ object Updater {
             dl.disconnect()
         }
         if (file.length() < 100_000 || (size > 0 && file.length() != size)) return
-        install(ctx, file)
+        install(ctx, file, silent = true)
     }
 
-    private fun install(c: Context, file: File) {
+    private fun install(c: Context, file: File, silent: Boolean = false) {
         val pi = c.packageManager.packageInstaller
+        // Önceki, onaylanmamış oturumlar yenisini engellemesin.
+        for (old in pi.mySessions) {
+            try {
+                pi.abandonSession(old.sessionId)
+            } catch (e: Exception) {
+            }
+        }
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
         if (Build.VERSION.SDK_INT >= 31) {
-            params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+            // Arka plan işi onaysız kurmayı dener; elle başlatılan kurulum onay penceresini hemen gösterir.
+            params.setRequireUserAction(
+                if (silent) PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED
+                else PackageInstaller.SessionParams.USER_ACTION_REQUIRED
+            )
         }
         val id = pi.createSession(params)
         pi.openSession(id).use { session ->

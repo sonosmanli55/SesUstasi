@@ -23,11 +23,15 @@ class InstallReceiver : BroadcastReceiver() {
                 }
                 if (confirm != null) {
                     confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    var started = false
                     if (Updater.listener != null) {
-                        c.startActivity(confirm)
-                    } else {
-                        notifyConfirm(c, confirm)
+                        try {
+                            c.startActivity(confirm)
+                            started = true
+                        } catch (e: Exception) {
+                        }
                     }
+                    if (!started) notifyConfirm(c, confirm)
                 }
             }
             PackageInstaller.STATUS_SUCCESS -> Updater.report(Updater.State.IDLE)
@@ -38,6 +42,11 @@ class InstallReceiver : BroadcastReceiver() {
                     Updater.State.ERROR,
                     "İmza uyuşmuyor. Sabit imza ayarlanmadan derlenen eski sürüm kurulu olabilir; " +
                         "bir kez silip yeni APK'yı elle kurun, sonraki güncellemeler tek dokunuşla gelir."
+                )
+            PackageInstaller.STATUS_FAILURE_BLOCKED ->
+                Updater.report(
+                    Updater.State.ERROR,
+                    "Kurulum engellendi. Ayarlar → Uygulamalar → Ses Ustası → “Bilinmeyen uygulamaları yükle”yi açın."
                 )
             else -> {
                 val m = i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "bilinmeyen hata"

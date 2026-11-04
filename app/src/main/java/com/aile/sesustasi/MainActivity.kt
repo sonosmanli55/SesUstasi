@@ -775,7 +775,6 @@ class MainActivity : Activity() {
         val box = updateBox ?: return
         box.removeAllViews()
         val st = Updater.state
-        val busy = st == Updater.State.CHECKING || st == Updater.State.DOWNLOADING || st == Updater.State.INSTALLING
 
         val summary = when (st) {
             Updater.State.DOWNLOADING -> "İndiriliyor %${Updater.progress}"
@@ -793,15 +792,20 @@ class MainActivity : Activity() {
         val pad = ui.vbox()
         pad.setPadding(dp(16), dp(8), dp(16), dp(16))
         val btn = if (st == Updater.State.AVAILABLE && rel != null) {
-            ui.button("Güncelle ve kur", Ui.Kind.FILLED) { startInstall() }
+            ui.button(if (Updater.message.startsWith("Onay penceresi")) "Tekrar dene" else "Güncelle ve kur", Ui.Kind.FILLED) {
+                if (Updater.message.startsWith("Onay penceresi")) Updater.retryInstall(this) else startInstall()
+            }
         } else {
             val label = when (st) {
                 Updater.State.CHECKING -> "Denetleniyor…"
                 Updater.State.DOWNLOADING -> "İndiriliyor %${Updater.progress}"
-                Updater.State.INSTALLING -> "Kurulum bekleniyor…"
+                Updater.State.INSTALLING -> "Tekrar dene"
                 else -> "Güncellemeleri denetle"
             }
-            ui.button(label, Ui.Kind.TONAL, enabled = !busy) { Updater.check(this) }
+            val locked = st == Updater.State.CHECKING || st == Updater.State.DOWNLOADING
+            ui.button(label, Ui.Kind.TONAL, enabled = !locked) {
+                if (st == Updater.State.INSTALLING) Updater.retryInstall(this) else Updater.check(this)
+            }
         }
         pad.addView(btn, ui.lp(ui.match, ui.wrap))
         box.addView(pad)
