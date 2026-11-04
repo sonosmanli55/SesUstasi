@@ -61,6 +61,7 @@ class MainActivity : Activity() {
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
+        UpdateJob.sync(this)
         if (Store.master(this)) VolumeService.refresh(this)
     }
 
@@ -626,6 +627,17 @@ class MainActivity : Activity() {
         pad.addView(btn, ui.lp(ui.match, ui.wrap))
         box.addView(pad)
 
+        ui.addRow(
+            box,
+            ui.row(
+                "Otomatik güncelle",
+                "Arka planda yaklaşık 6 saatte bir denetler ve yeni sürümü indirir. Android izin verirse sessizce kurar, vermezse bildirimle onay ister.",
+                trailing = styledSwitch(Store.autoUpdate(this)) { on ->
+                    Store.setAutoUpdate(this, on)
+                    UpdateJob.sync(this)
+                }
+            )
+        )
         val repo = Updater.repo(this)
         ui.addRow(
             box,

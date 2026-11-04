@@ -123,6 +123,7 @@ class VolumeService : Service() {
         super.onCreate()
         am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        UpdateJob.sync(this)
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(
             NotificationChannel(CH, "Ses Ustası", NotificationManager.IMPORTANCE_LOW)

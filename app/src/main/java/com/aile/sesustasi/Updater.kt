@@ -166,9 +166,58 @@ object Updater {
         }.start()
     }
 
+    /**
+     * Arka plan işi için eşzamanlı yol: yeni sürüm varsa indirir ve kurulumu başlatır.
+     * Android 12+'da, uygulama kendi kendini daha önce kurduysa onay istenmeden kurulur;
+     * aksi halde InstallReceiver onay için bildirim gösterir.
+     */
+    fun backgroundUpdate(c: Context) {
+        if (state == State.CHECKING || state == State.DOWNLOADING || state == State.INSTALLING) return
+        val ctx = c.applicationContext
+        val repo = repo(ctx)
+        if (repo.isBlank()) return
+        val token = Store.updateToken(ctx)
+        var apkUrl = ""
+        var size = 0L
+        val con = open("https://api.github.com/repos/$repo/releases/latest", token, "application/vnd.github+json")
+        try {
+            if (con.responseCode != 200) return
+            val json = JSONObject(con.inputStream.bufferedReader().readText())
+            val build = Regex("\\d+").find(json.optString("tag_name"))?.value?.toIntOrNull() ?: 0
+            Store.setLastUpdateCheck(ctx, System.currentTimeMillis())
+            if (build <= currentBuild()) return
+            val assets = json.optJSONArray("assets") ?: return
+            for (i in 0 until assets.length()) {
+                val a = assets.getJSONObject(i)
+                if (a.optString("name").endsWith(".apk")) {
+                    apkUrl = a.optString("url")
+                    size = a.optLong("size")
+                    break
+                }
+            }
+        } finally {
+            con.disconnect()
+        }
+        if (apkUrl.isBlank()) return
+        val file = File(ctx.cacheDir, "update.apk")
+        if (file.exists()) file.delete()
+        val dl = open(apkUrl, token, "application/octet-stream")
+        try {
+            if (dl.responseCode != 200) return
+            dl.inputStream.use { input -> file.outputStream().use { out -> input.copyTo(out) } }
+        } finally {
+            dl.disconnect()
+        }
+        if (file.length() < 100_000 || (size > 0 && file.length() != size)) return
+        install(ctx, file)
+    }
+
     private fun install(c: Context, file: File) {
         val pi = c.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+        if (Build.VERSION.SDK_INT >= 31) {
+            params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+        }
         val id = pi.createSession(params)
         pi.openSession(id).use { session ->
             file.inputStream().use { input ->

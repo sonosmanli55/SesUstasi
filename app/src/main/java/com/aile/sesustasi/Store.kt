@@ -40,6 +40,10 @@ object Store {
     fun setKeyBoost(c: Context, v: Int) =
         p(c).edit().putInt("key_boost", v.coerceIn(100, VolumeMath.MAX_PARENT)).apply()
 
+    // Otomatik güncelleme (arka planda denetle ve kur), varsayılan açık
+    fun autoUpdate(c: Context) = p(c).getBoolean("auto_update", true)
+    fun setAutoUpdate(c: Context, v: Boolean) = p(c).edit().putBoolean("auto_update", v).apply()
+
     // --- Güncelleme denetleyicisi ---
     fun updateRepo(c: Context) = p(c).getString("upd_repo", "") ?: ""
     fun setUpdateRepo(c: Context, v: String) = p(c).edit().putString("upd_repo", v.trim()).apply()

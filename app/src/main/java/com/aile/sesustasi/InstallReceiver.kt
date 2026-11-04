@@ -1,5 +1,9 @@
 package com.aile.sesustasi
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -19,7 +23,11 @@ class InstallReceiver : BroadcastReceiver() {
                 }
                 if (confirm != null) {
                     confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    c.startActivity(confirm)
+                    if (Updater.listener != null) {
+                        c.startActivity(confirm)
+                    } else {
+                        notifyConfirm(c, confirm)
+                    }
                 }
             }
             PackageInstaller.STATUS_SUCCESS -> Updater.report(Updater.State.IDLE)
@@ -36,5 +44,22 @@ class InstallReceiver : BroadcastReceiver() {
                 Updater.report(Updater.State.ERROR, "Kurulum başarısız: $m")
             }
         }
+    }
+
+    /** Uygulama ekranda değilse onay penceresini doğrudan açmak yerine bildirimle sunar. */
+    private fun notifyConfirm(c: Context, confirm: Intent) {
+        val nm = c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.createNotificationChannel(
+            NotificationChannel("guncelleme", "Güncellemeler", NotificationManager.IMPORTANCE_DEFAULT)
+        )
+        val pi = PendingIntent.getActivity(c, 2, confirm, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val n = Notification.Builder(c, "guncelleme")
+            .setSmallIcon(R.drawable.ic_tile)
+            .setContentTitle("Ses Ustası güncellemesi hazır")
+            .setContentText("Kurmak için dokunun")
+            .setContentIntent(pi)
+            .setAutoCancel(true)
+            .build()
+        nm.notify(18, n)
     }
 }
