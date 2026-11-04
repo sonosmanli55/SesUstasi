@@ -225,11 +225,26 @@ class MainActivity : Activity() {
             )
             if (keyOn) {
                 val granted = keyServiceEnabled()
+                if (!granted) {
+                    ui.addRow(
+                        keys,
+                        ui.row(
+                            "1. Kısıtlamayı kaldır",
+                            "Android, dışarıdan kurulan uygulamalarda erişilebilirliği engeller. Açılan sayfada sağ üstteki ⋮ simgesine dokunup “Kısıtlanmış ayarlara izin ver”i seçin.",
+                            trailing = ui.action("Aç")
+                        ) {
+                            toast("Sağ üstteki ⋮ → Kısıtlanmış ayarlara izin ver")
+                            val i = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                            i.data = Uri.parse("package:$packageName")
+                            startActivity(i)
+                        }
+                    )
+                }
                 ui.addRow(
                     keys,
                     ui.row(
-                        "Erişilebilirlik izni",
-                        if (granted) "Verildi" else "Gerekli. Android 13+ için önce Uygulama bilgisi → ⋮ → “Kısıtlanmış ayarlara izin ver”.",
+                        "2. Erişilebilirlik izni",
+                        if (granted) "Verildi" else "Gerekli. Listeden “Ses Ustası”nı seçip açın.",
                         summaryColor = if (granted) pal.inkSoft else pal.danger,
                         trailing = if (granted) null else ui.action("Aç")
                     ) {
