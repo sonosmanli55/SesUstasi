@@ -33,6 +33,13 @@ object Store {
         p(c).edit().putInt(if (child) "level_child" else "level_parent", x).apply()
     }
 
+    // Ses tuşlarıyla yükseltme (yalnızca ebeveyn modu): sesi kilitlemez, tuşlar en yüksekte yükseltmeye devam eder
+    fun keyMode(c: Context) = p(c).getBoolean("key_mode", false)
+    fun setKeyMode(c: Context, v: Boolean) = p(c).edit().putBoolean("key_mode", v).apply()
+    fun keyBoost(c: Context) = p(c).getInt("key_boost", 100).coerceIn(100, VolumeMath.MAX_PARENT)
+    fun setKeyBoost(c: Context, v: Int) =
+        p(c).edit().putInt("key_boost", v.coerceIn(100, VolumeMath.MAX_PARENT)).apply()
+
     // --- Güncelleme denetleyicisi ---
     fun updateRepo(c: Context) = p(c).getString("upd_repo", "") ?: ""
     fun setUpdateRepo(c: Context, v: String) = p(c).edit().putString("upd_repo", v.trim()).apply()

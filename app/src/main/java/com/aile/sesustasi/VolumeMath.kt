@@ -16,4 +16,9 @@ object VolumeMath {
     /** LoudnessEnhancer kazancı (milibel). 100 ve altında yükseltme yoktur. */
     fun gainMb(level: Int): Int =
         if (level <= 100) 0 else (2000.0 * Math.log10(level / 100.0)).toInt()
+
+    const val BOOST_STEP = 25
+
+    /** Ses tuşlarıyla yükseltme: 100 ile 500 arasında, adım adım. */
+    fun stepBoost(cur: Int, delta: Int): Int = (cur + delta).coerceIn(100, MAX_PARENT)
 }

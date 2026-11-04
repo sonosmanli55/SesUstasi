@@ -33,4 +33,10 @@ class VolumeMathTest {
         assertEquals(602, VolumeMath.gainMb(200))
         assertEquals(1397, VolumeMath.gainMb(500))
     }
+
+    @Test fun boostStepClamps() {
+        assertEquals(125, VolumeMath.stepBoost(100, VolumeMath.BOOST_STEP))
+        assertEquals(100, VolumeMath.stepBoost(100, -VolumeMath.BOOST_STEP))
+        assertEquals(500, VolumeMath.stepBoost(500, VolumeMath.BOOST_STEP))
+    }
 }

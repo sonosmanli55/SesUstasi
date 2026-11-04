@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Ses Ustası</string>
+    <string name="key_service_desc">Yalnızca ses tuşlarına basıldığını algılar; telefon sesi en yüksekteyken tuşa basmaya devam edince ses yükseltmeyi artırır. Ekran içeriğini okumaz.</string>
 </resources>

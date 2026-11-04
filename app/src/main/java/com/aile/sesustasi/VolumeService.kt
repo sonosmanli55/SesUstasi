@@ -192,15 +192,35 @@ class VolumeService : Service() {
         return VolumeMath.targetVol(Store.activeLevel(this), max)
     }
 
-    private fun gainFor(): Int = VolumeMath.gainMb(Store.activeLevel(this))
+    private fun keyModeOn() = Store.keyMode(this) && !Store.childMode(this)
+
+    private fun gainFor(): Int =
+        VolumeMath.gainMb(if (keyModeOn()) Store.keyBoost(this) else Store.activeLevel(this))
 
     private fun enforce() {
+        // Tuşla yükseltme modunda ses kilitlenmez; kullanıcı tuşlarla serbestçe ayarlar.
+        if (keyModeOn()) {
+            guardKeyBoost()
+            return
+        }
         val t = targetVol()
         try {
             if (am.getStreamVolume(AudioManager.STREAM_MUSIC) != t) {
                 am.setStreamVolume(AudioManager.STREAM_MUSIC, t, 0)
             }
         } catch (e: Throwable) {
+        }
+    }
+
+    /** Telefon sesi başka yolla düşürüldüyse yükseltmeyi sıfırla (kulak koruması). */
+    private fun guardKeyBoost() {
+        if (Store.keyBoost(this) <= 100) return
+        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        if (am.getStreamVolume(AudioManager.STREAM_MUSIC) < max) {
+            Store.setKeyBoost(this, 100)
+            gainMb = 0
+            ensureEffects()
+            updateNotification()
         }
     }
 
@@ -292,7 +312,9 @@ class VolumeService : Service() {
         val child = Store.childMode(this)
         val special = Store.special(this)
         val txt = (if (child) "Çocuk modu" else "Ebeveyn modu") + " · " +
-            (if (special) "Özel ayar %${Store.activeLevel(this)}" else "Telefonun normal ayarı")
+            (if (!special) "Telefonun normal ayarı"
+            else if (keyModeOn()) "Tuşla yükseltme %${Store.keyBoost(this)}"
+            else "Özel ayar %${Store.activeLevel(this)}")
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
         )

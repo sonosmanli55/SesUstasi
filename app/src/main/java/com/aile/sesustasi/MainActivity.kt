@@ -205,6 +205,54 @@ class MainActivity : Activity() {
             col.addView(kid, ui.lp(ui.match, ui.wrap, t = 12))
         }
 
+        if (!child) {
+            col.addView(ui.heading("Ses tuşlarıyla yükseltme"), ui.lp(ui.wrap, ui.wrap, l = 4, t = 24, b = 8))
+            val keys = ui.section()
+            val keyOn = Store.keyMode(this)
+            ui.addRow(
+                keys,
+                ui.row(
+                    "Tuşlarla yükselt",
+                    "Açıkken ses kilitlenmez. Telefon sesi en yüksekteyken ses artır tuşuna basmaya devam ettikçe ses yükselir.",
+                    trailing = styledSwitch(keyOn) { on ->
+                        Store.setKeyMode(this, on)
+                        Store.setKeyBoost(this, 100)
+                        VolumeService.refresh(this)
+                        render()
+                    }
+                )
+            )
+            if (keyOn) {
+                val granted = keyServiceEnabled()
+                ui.addRow(
+                    keys,
+                    ui.row(
+                        "Erişilebilirlik izni",
+                        if (granted) "Verildi" else "Gerekli. Android 13+ için önce Uygulama bilgisi → ⋮ → “Kısıtlanmış ayarlara izin ver”.",
+                        summaryColor = if (granted) pal.inkSoft else pal.danger,
+                        trailing = if (granted) null else ui.action("Aç")
+                    ) {
+                        if (!granted) {
+                            toast("Listeden “Ses Ustası”nı seçip açın")
+                            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        }
+                    }
+                )
+                ui.addRow(
+                    keys,
+                    ui.row(
+                        "Şu anki yükseltme", "%${Store.keyBoost(this)}",
+                        trailing = ui.action("Sıfırla")
+                    ) {
+                        Store.setKeyBoost(this, 100)
+                        VolumeService.refresh(this)
+                        render()
+                    }
+                )
+            }
+            col.addView(keys)
+        }
+
         // Mod
         col.addView(ui.heading("Mod"), ui.lp(ui.wrap, ui.wrap, l = 4, t = 24, b = 8))
         val mode = ui.section()
@@ -343,7 +391,8 @@ class MainActivity : Activity() {
         val hint = ui.small("")
         inner.addView(hint, ui.lp(ui.match, ui.wrap, t = 4))
 
-        inner.addView(slider(child) { v ->
+        val keyOn = !child && Store.keyMode(this)
+        fun show(v: Int) {
             big.text = v.toString()
             if (v > 100) {
                 tag.text = "Yükseltme +${VolumeMath.gainMb(v) / 100} dB"
@@ -352,10 +401,16 @@ class MainActivity : Activity() {
                 hint.text = "Telefon sesi maksimumda, üstüne yükseltme eklenir"
             } else {
                 tag.visibility = View.GONE
-                hint.text = if (child) "Telefon sesinin %$v kadarına kilitlenir"
+                hint.text = if (keyOn) "Ses tuşuyla en yükseğe çıkın, sonra basmaya devam edin"
+                else if (child) "Telefon sesinin %$v kadarına kilitlenir"
                 else "Telefon sesi bu oranda kilitlenir"
             }
-        }, ui.lp(ui.match, ui.wrap, t = 8))
+        }
+        if (keyOn) {
+            show(Store.keyBoost(this))
+        } else {
+            inner.addView(slider(child) { v -> show(v) }, ui.lp(ui.match, ui.wrap, t = 8))
+        }
 
         if (child) {
             inner.addView(
@@ -501,6 +556,11 @@ class MainActivity : Activity() {
             return wrapCol
         }
         return frame
+    }
+
+    private fun keyServiceEnabled(): Boolean {
+        val v = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
+        return v.contains(packageName + "/" + VolumeKeyService::class.java.name)
     }
 
     /** Marka bazlı pil/otomatik başlatma yönergesi. */
