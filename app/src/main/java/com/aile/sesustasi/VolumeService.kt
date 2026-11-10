@@ -62,6 +62,9 @@ class VolumeService : Service() {
     private lateinit var pm: PowerManager
     private var lastFx = 0L
 
+    /** Yükseltme için sistem sesini en yükseğe çektiysek true: bundan sonra düşüş kullanıcının isteğidir. */
+    private var boostHeld = false
+
     /** Yoklama aralığı: pil tasarrufu açıkken ekran kapalıyken ve tuş modunda seyrek. Anlık tepki yine olay dinleyicilerinden gelir. */
     private fun interval(): Long {
         if (!Store.saver(this)) return 400L
@@ -214,6 +217,7 @@ class VolumeService : Service() {
     }
 
     private fun restoreNormal() {
+        boostHeld = false
         val v = Store.normalVol(this)
         if (v >= 0) {
             try {
@@ -238,6 +242,30 @@ class VolumeService : Service() {
         // Tuşla yükseltme modunda ses kilitlenmez; kullanıcı tuşlarla serbestçe ayarlar.
         if (keyModeOn()) {
             guardKeyBoost()
+            return
+        }
+        val level = Store.activeLevel(this)
+        if (level <= 100) boostHeld = false
+        if (level > 100 && !Store.childMode(this)) {
+            // Yükseltme bölgesi: sistem sesi en yüksekte tutulur, ama kullanıcı telefondan KISARSA
+            // ona saygı gösterilir (geri çekilmez): yükseltme kapanır, seviye kısılan değere iner.
+            val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val vol = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+            try {
+                if (vol >= max) {
+                    boostHeld = true
+                } else if (boostHeld) {
+                    boostHeld = false
+                    Store.setLevel(this, false, VolumeMath.percentOf(vol, max))
+                    gainMb = 0
+                    ensureEffects()
+                    updateNotification()
+                } else {
+                    am.setStreamVolume(AudioManager.STREAM_MUSIC, max, 0)
+                    boostHeld = true
+                }
+            } catch (e: Throwable) {
+            }
             return
         }
         val t = targetVol()

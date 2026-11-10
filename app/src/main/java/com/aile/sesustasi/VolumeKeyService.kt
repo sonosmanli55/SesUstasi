@@ -56,9 +56,31 @@ class VolumeKeyService : AccessibilityService() {
         super.onDestroy()
     }
 
+    // Tuş eşleşmesi: sistem bir tuşun "bas" olayını gördüyse "bırak" olayını da görmeli; yoksa
+    // telefonun ses penceresi tuş hâlâ basılıymış gibi ekranda takılı kalır.
+    private val systemSawDown = HashSet<Int>()
+    private val weConsumedDown = HashSet<Int>()
+    private var lastStep = 0L
+
     override fun onKeyEvent(ev: KeyEvent): Boolean {
         val code = ev.keyCode
         if (code != KeyEvent.KEYCODE_VOLUME_UP && code != KeyEvent.KEYCODE_VOLUME_DOWN) return false
+
+        if (ev.action == KeyEvent.ACTION_UP) {
+            val sys = systemSawDown.remove(code)
+            val ours = weConsumedDown.remove(code)
+            // Sistem "bas"ı gördüyse "bırak"ı da görsün; "bas"ı yalnızca biz aldıysak "bırak"ı da biz alırız.
+            return !sys && ours
+        }
+        if (ev.action != KeyEvent.ACTION_DOWN) return false
+
+        val consume = handleDown(code, ev.repeatCount)
+        if (consume) weConsumedDown.add(code) else systemSawDown.add(code)
+        return consume
+    }
+
+    /** true: tuşu biz aldık (sistem görmez), false: sisteme bırak. */
+    private fun handleDown(code: Int, repeat: Int): Boolean {
         if (!Store.master(this) || !Store.special(this) || !Store.keyMode(this) || Store.childMode(this)) {
             return false
         }
@@ -66,37 +88,36 @@ class VolumeKeyService : AccessibilityService() {
         val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
         val vol = am.getStreamVolume(AudioManager.STREAM_MUSIC)
         val boost = Store.keyBoost(this)
+        val up = code == KeyEvent.KEYCODE_VOLUME_UP
 
         // Medya çalmıyorsa (ya da yeni durakladıysa) tuşlar zil sesini ayarlıyor olabilir.
         // Kısa duraklamalar ve parça geçişleri tuşu kaçırmasın diye 10 sn'lik tolerans var.
         val now = System.currentTimeMillis()
         if (am.isMusicActive) VolumeService.lastMusic = now
-        val mediaRecent = now - VolumeService.lastMusic < MUSIC_GRACE_MS
-        if (!mediaRecent) {
-            if (code == KeyEvent.KEYCODE_VOLUME_UP && vol >= max && ev.action == KeyEvent.ACTION_DOWN) {
-                show("Yükseltme için müzik ya da video çalmalı", false)
-            }
+        if (now - VolumeService.lastMusic >= MUSIC_GRACE_MS) {
+            if (up && vol >= max && repeat == 0) show("Yükseltme için müzik ya da video çalmalı", false)
             return false
         }
 
-        val up = code == KeyEvent.KEYCODE_VOLUME_UP
         if (up && vol < max) return false          // normal aralık: telefon kendi halleder
         if (!up && boost <= 100) return false      // yükseltme yok: telefon kendi halleder
 
-        if (ev.action == KeyEvent.ACTION_DOWN) {
-            val next = VolumeMath.boostStep(boost, up)
-            if (next != boost) {
-                Store.setKeyBoost(this, next)
-                VolumeService.refresh(this)
-            }
-            val text = when {
-                next > 100 && next >= VolumeMath.MAX_PARENT ->
-                    "Ses %$next (+${VolumeMath.gainMb(next) / 100} dB)  en fazla"
-                next > 100 -> "Ses %$next (+${VolumeMath.gainMb(next) / 100} dB)"
-                else -> "Ses %100 (normal en yüksek)"
-            }
-            show(text, next > 100)
+        // Basılı tutmada her tekrar bir adım atlamasın: en çok 0,3 sn'de bir adım (kulak koruması).
+        if (repeat > 0 && now - lastStep < 300L) return true
+        lastStep = now
+
+        val next = VolumeMath.boostStep(boost, up)
+        if (next != boost) {
+            Store.setKeyBoost(this, next)
+            VolumeService.refresh(this)
         }
+        val text = when {
+            next > 100 && next >= VolumeMath.MAX_PARENT ->
+                "Ses %$next (+${VolumeMath.gainMb(next) / 100} dB)  en fazla"
+            next > 100 -> "Ses %$next (+${VolumeMath.gainMb(next) / 100} dB)"
+            else -> "Ses %100 (normal en yüksek)"
+        }
+        show(text, next > 100)
         return true
     }
 

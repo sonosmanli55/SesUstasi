@@ -439,7 +439,7 @@ class MainActivity : Activity() {
                         hint.text = "Dikkat: %${VolumeMath.SAFE_BOOST} üstünde ses bozulabilir, hoparlöre ve kulağa zarar verebilir."
                         hint.setTextColor(pal.danger)
                     } else {
-                        hint.text = "Telefon sesi en yüksekte, üstüne yükseltme ekleniyor."
+                        hint.text = "Telefon sesi en yüksekte, üstüne yükseltme ekleniyor. Sesi telefondan kısarsanız yükseltme kapanır."
                         hint.setTextColor(pal.inkSoft)
                     }
                 } else {
